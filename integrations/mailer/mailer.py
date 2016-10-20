@@ -81,6 +81,7 @@ class FanoutConsumer(ConsumerMixin):
 
         self.connection = connection
         self.channel = self.connection.channel()
+        LOG.info('Configured fanout consumer on topic "%s"', OPTIONS['amqp_topic'])
 
     def get_consumers(self, Consumer, channel):
 
@@ -107,7 +108,7 @@ class FanoutConsumer(ConsumerMixin):
         ]
 
     def on_message(self, body, message):
-
+        LOG.debug("Received: %s", body)
         try:
             alert = AlertDocument.parse_alert(body)
             alertid = alert.get_id()
@@ -117,10 +118,12 @@ class FanoutConsumer(ConsumerMixin):
 
         if alert.repeat:
             message.ack()
+            LOG.info('%s : Do not queue email, repeat message', alertid)
             return
 
         if alert.status not in ['open', 'closed']:
             message.ack()
+            LOG.info('%s : Do not queue email, not open or closed', alertid)
             return
 
         if (
@@ -128,20 +131,24 @@ class FanoutConsumer(ConsumerMixin):
             alert.previous_severity not in ['critical', 'major']
         ):
             message.ack()
+            LOG.info('%s : Do not queue email, not important enough', alertid)
             return
 
         if alertid in on_hold:
             if alert.severity in ['normal', 'ok', 'cleared']:
                 try:
+                    LOG.info('%s : De-queue alert because it has been cleared', alertid)
                     del on_hold[alertid]
                 except KeyError:
                     pass
                 message.ack()
             else:
                 on_hold[alertid] = (alert, time.time() + HOLD_TIME)
+                LOG.info('%s : Extend queue on-hold time to %s', alertid, datetime.datetime.fromtimestamp(on_hold[alertid][1]).strftime("%c"))
                 message.ack()
         else:
             on_hold[alertid] = (alert, time.time() + HOLD_TIME)
+            LOG.info('%s : Queued alert on hold until %s', alertid, datetime.datetime.fromtimestamp(on_hold[alertid][1]).strftime("%c"))
             message.ack()
 
 
